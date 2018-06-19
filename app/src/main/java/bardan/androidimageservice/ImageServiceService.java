@@ -1,5 +1,6 @@
 package bardan.androidimageservice;
 
+import android.app.NotificationManager;
 import android.app.Service;
 import android.content.BroadcastReceiver;
 import android.content.Context;
@@ -13,18 +14,24 @@ import android.net.wifi.WifiManager;
 import android.os.Environment;
 import android.os.IBinder;
 import android.support.annotation.Nullable;
+import android.support.v4.app.NotificationCompat;
 import android.util.Log;
 import android.widget.Toast;
 
 import java.io.ByteArrayOutputStream;
+import java.io.DataOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.math.BigInteger;
 import java.net.InetAddress;
 import java.net.Socket;
 import java.net.UnknownHostException;
+import java.util.Arrays;
+import java.util.LinkedList;
+import java.util.List;
 
 public class ImageServiceService extends Service {
 
@@ -69,6 +76,12 @@ public class ImageServiceService extends Service {
      * starts the image transfer from the DCIM folder.
      */
     private void startImageTransfer() {
+        final NotificationCompat.Builder builder = new NotificationCompat.Builder(this);
+        final int notify_id = 1;
+        final NotificationManager NM = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        builder.setSmallIcon(R.drawable.ic_launcher_background);
+        builder.setContentTitle("Picture Transfer");
+        builder.setContentText("Transfer in progress...");
         new Thread(new Runnable() {
             @Override
             public void run() {
@@ -76,12 +89,41 @@ public class ImageServiceService extends Service {
                 if (dcim == null) {
                     return;
                 }
-                File[] pics = dcim.listFiles();
+                File[] files = dcim.listFiles();
+                List<File> pictures = new LinkedList<File>();
                 int count = 0;
-                if (pics != null) {
-                    for (File pic : pics) {
-                        sendPictureViaTCP(pic);
+                for (File file : files) {
+                    listAllPictures(file, pictures);
+                    for (File pic : pictures) {
+                        Socket socket = null;
+                        try {
+                            InetAddress serverAddr = InetAddress.getByName(ipAddr);
+                            socket = new Socket(serverAddr, port);
+                            builder.setProgress(pictures.size(), count, false);
+                            if (count == pictures.size() / 2) {
+                                // halfway there
+                                builder.setContentText("Halfway through and going...");
+                            }
+                            NM.notify(notify_id, builder.build());
+                            if (sendPictureViaTCP(socket, pic)) {
+                                count++;
+                            }
+                        } catch(Exception e) {
+                            Log.e("TCP", "Connection Failed", e);
+                            return;
+                        } finally {
+                            if (socket != null) {
+                                try {
+                                    socket.close();
+                                } catch (IOException e) {
+                                    Log.e("TCP", "Error closing socket", e);
+                                }
+                            }
+                        }
                     }
+                    builder.setProgress(0, 0, false);
+                    builder.setContentText("Transfer Complete");
+                    NM.notify(notify_id, builder.build());
                 }
             }
         }).start();
@@ -89,21 +131,72 @@ public class ImageServiceService extends Service {
     }
 
     /**
-     * Sends the picture via TCP to the service.
+     * if file is a directory, scans the files in the folder and sub-folders
+     * and adds them to the list.
+     * o.w, adds the file to the list.
      *
-     * @param pic - picture file to send.
+     * @param file     - folder or file.
+     * @param pictures - list of pictures to add.
      */
-    private void sendPictureViaTCP(File pic) {
+    private void listAllPictures(File file, List<File> pictures) {
+        if (file.isDirectory()) {
+            File[] files = file.listFiles();
+            for (File f : files) {
+                listAllPictures(f, pictures);
+            }
+        } else {
+            pictures.add(file);
+        }
+    }
+
+
+    /**
+     *
+     * @param socket - socket to send through.
+     * @param pic - picture to send.
+     * @return - true if send was successful.
+     */
+    private boolean sendPictureViaTCP(Socket socket, File pic) {
         try {
-            InetAddress serverAddr = InetAddress.getByName(ipAddr);
-            Socket socket = new Socket(serverAddr, port);
             OutputStream output = socket.getOutputStream();
-            FileInputStream fis = new FileInputStream(pic);
+            DataOutputStream outputStream = new DataOutputStream(output);
+            byte[] name = pic.getName().getBytes();
             byte[] imgBytes = convertPictureToBytes(pic);
-            output.write(imgBytes);
-            output.flush();
+            //byte[] imgBytes = readImageData(pic);
+            if (imgBytes != null) {
+                // length of picture
+                int length = name.length;
+                outputStream.writeInt(length);
+                output.write(name);
+                outputStream.writeInt(imgBytes.length);
+                //output.write(imgBytes);
+                outputStream.write(imgBytes, 0, imgBytes.length);
+                output.flush();
+            }
         } catch (Exception e) {
             Log.e("TCP", "Error Transferring picture" + pic.getName(), e);
+            return false;
+        }
+        return true;
+    }
+
+    private byte[] readImageData(File pic) {
+        byte[] imgData;
+        try {
+            FileInputStream fis = new FileInputStream(pic);
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            byte[] buffer = new byte[1024];
+            while ((fis.read(buffer, 0, buffer.length)) != -1) {
+                output.write(buffer);
+            }
+            imgData = output.toByteArray();
+            return imgData;
+        } catch (FileNotFoundException e) {
+            Log.e("File", "Invalid file", e);
+            return null;
+        } catch (IOException e) {
+            Log.e("File", "Failed reading file data", e);
+            return null;
         }
     }
 
