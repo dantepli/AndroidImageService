@@ -1,5 +1,6 @@
 package bardan.androidimageservice;
 
+import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.Service;
 import android.content.BroadcastReceiver;
@@ -33,11 +34,14 @@ import java.util.Arrays;
 import java.util.LinkedList;
 import java.util.List;
 
+import static java.lang.Thread.sleep;
+
 public class ImageServiceService extends Service {
 
     private BroadcastReceiver wifiBroadcast;
     private static final String ipAddr = "10.0.2.2";
     private static final int port = 8080;
+    private boolean transferFlag = false;
 
     public ImageServiceService() {
     }
@@ -63,7 +67,7 @@ public class ImageServiceService extends Service {
                     if (networkInfo.getType() == ConnectivityManager.TYPE_WIFI) {
                         // get the different network states
                         if (networkInfo.getState() == NetworkInfo.State.CONNECTED) {
-                            startImageTransfer();
+                            startImageTransfer(context);
                         }
                     }
                 }
@@ -75,20 +79,30 @@ public class ImageServiceService extends Service {
     /**
      * starts the image transfer from the DCIM folder.
      */
-    private void startImageTransfer() {
-        final NotificationCompat.Builder builder = new NotificationCompat.Builder(this);
+    private void startImageTransfer(Context context) {
+        if (transferFlag) {
+            // already transferring
+            return;
+        } else {
+            transferFlag = true;
+        }
+        final NotificationCompat.Builder builder = new NotificationCompat.Builder(context, "default");
         final int notify_id = 1;
-        final NotificationManager NM = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        final NotificationManager NM =
+                (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
         builder.setSmallIcon(R.drawable.ic_launcher_background);
         builder.setContentTitle("Picture Transfer");
         builder.setContentText("Transfer in progress...");
+
+        NotificationChannel channel = new NotificationChannel("default",
+                "progress", NotificationManager.IMPORTANCE_DEFAULT);
+        NM.createNotificationChannel(channel);
+
         new Thread(new Runnable() {
             @Override
             public void run() {
-                File dcim = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM);
-                if (dcim == null) {
-                    return;
-                }
+                File dcim = new File(Environment.getExternalStoragePublicDirectory(Environment.
+                        DIRECTORY_DCIM), "Camera");
                 File[] files = dcim.listFiles();
                 List<File> pictures = new LinkedList<File>();
                 int count = 0;
@@ -108,7 +122,7 @@ public class ImageServiceService extends Service {
                             if (sendPictureViaTCP(socket, pic)) {
                                 count++;
                             }
-                        } catch(Exception e) {
+                        } catch (Exception e) {
                             Log.e("TCP", "Connection Failed", e);
                             return;
                         } finally {
@@ -121,9 +135,11 @@ public class ImageServiceService extends Service {
                             }
                         }
                     }
+                    pictures.clear();
                     builder.setProgress(0, 0, false);
                     builder.setContentText("Transfer Complete");
                     NM.notify(notify_id, builder.build());
+                    transferFlag = false;
                 }
             }
         }).start();
@@ -151,9 +167,8 @@ public class ImageServiceService extends Service {
 
 
     /**
-     *
      * @param socket - socket to send through.
-     * @param pic - picture to send.
+     * @param pic    - picture to send.
      * @return - true if send was successful.
      */
     private boolean sendPictureViaTCP(Socket socket, File pic) {
@@ -165,8 +180,7 @@ public class ImageServiceService extends Service {
             //byte[] imgBytes = readImageData(pic);
             if (imgBytes != null) {
                 // length of picture
-                int length = name.length;
-                outputStream.writeInt(length);
+                outputStream.writeInt(name.length);
                 output.write(name);
                 outputStream.writeInt(imgBytes.length);
                 //output.write(imgBytes);
