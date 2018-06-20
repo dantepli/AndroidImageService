@@ -1,5 +1,7 @@
 package bardan.androidimageservice;
 
+import android.Manifest;
+import android.app.ActivityManager;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.Service;
@@ -7,6 +9,7 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.ConnectivityManager;
@@ -15,7 +18,9 @@ import android.net.wifi.WifiManager;
 import android.os.Environment;
 import android.os.IBinder;
 import android.support.annotation.Nullable;
+import android.support.v4.app.ActivityCompat;
 import android.support.v4.app.NotificationCompat;
+import android.support.v4.content.ContextCompat;
 import android.util.Log;
 import android.widget.Button;
 import android.widget.Toast;
@@ -41,7 +46,7 @@ public class ImageServiceService extends Service {
 
     private BroadcastReceiver wifiBroadcast;
     private static final String ipAddr = "10.0.2.2";
-    private static final int port = 8080;
+    private static final int port = 8000;
     private boolean transferFlag = false;
 
     public ImageServiceService() {
@@ -87,6 +92,7 @@ public class ImageServiceService extends Service {
         } else {
             transferFlag = true;
         }
+
         final NotificationCompat.Builder builder = new NotificationCompat.Builder(context, "default");
         final int notify_id = 1;
         final NotificationManager NM =
@@ -107,8 +113,8 @@ public class ImageServiceService extends Service {
                 File[] files = dcim.listFiles();
                 List<File> pictures = new LinkedList<File>();
                 int count = 0;
+                listAllPictures(dcim, pictures);
                 for (File file : files) {
-                    listAllPictures(file, pictures);
                     for (File pic : pictures) {
                         Socket socket = null;
                         try {
@@ -137,11 +143,11 @@ public class ImageServiceService extends Service {
                         }
                     }
                     pictures.clear();
-                    builder.setProgress(0, 0, false);
-                    builder.setContentText("Transfer Complete");
-                    NM.notify(notify_id, builder.build());
-                    transferFlag = false;
                 }
+                builder.setProgress(0, 0, false);
+                builder.setContentText("Transfer Complete");
+                NM.notify(notify_id, builder.build());
+                transferFlag = false;
             }
         }).start();
 
