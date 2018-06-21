@@ -1,7 +1,5 @@
 package bardan.androidimageservice;
 
-import android.Manifest;
-import android.app.ActivityManager;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.Service;
@@ -9,44 +7,24 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
-import android.content.pm.PackageManager;
-import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
 import android.net.wifi.WifiManager;
 import android.os.Environment;
 import android.os.IBinder;
 import android.support.annotation.Nullable;
-import android.support.v4.app.ActivityCompat;
 import android.support.v4.app.NotificationCompat;
-import android.support.v4.content.ContextCompat;
-import android.util.Log;
-import android.widget.Button;
+
 import android.widget.Toast;
 
-import java.io.ByteArrayOutputStream;
-import java.io.DataOutputStream;
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileNotFoundException;
-import java.io.IOException;
-import java.io.OutputStream;
-import java.math.BigInteger;
-import java.net.InetAddress;
-import java.net.Socket;
-import java.net.UnknownHostException;
-import java.util.Arrays;
 import java.util.LinkedList;
 import java.util.List;
 
-import static java.lang.Thread.sleep;
-
 public class ImageServiceService extends Service {
 
-    private BroadcastReceiver wifiBroadcast;
     private static final String ipAddr = "10.0.2.2";
-    private static final int port = 8000;
+    private static final int port = 8001;
     private boolean transferFlag = false;
 
     public ImageServiceService() {
@@ -64,7 +42,7 @@ public class ImageServiceService extends Service {
         final IntentFilter wifiFilter = new IntentFilter();
         wifiFilter.addAction("android.net.wifi.supplicant.CONNECTION_CHANGE");
         wifiFilter.addAction("android.net.wifi.STATE_CHANGE");
-        this.wifiBroadcast = new BroadcastReceiver() {
+        BroadcastReceiver wifiBroadcast = new BroadcastReceiver() {
             @Override
             public void onReceive(Context context, Intent intent) {
                 WifiManager wifiManager = (WifiManager) context.getSystemService(Context.WIFI_SERVICE);
@@ -79,7 +57,7 @@ public class ImageServiceService extends Service {
                 }
             }
         };
-        this.registerReceiver(this.wifiBroadcast, wifiFilter);
+        this.registerReceiver(wifiBroadcast, wifiFilter);
     }
 
     /**
@@ -103,51 +81,36 @@ public class ImageServiceService extends Service {
 
         NotificationChannel channel = new NotificationChannel("default",
                 "progress", NotificationManager.IMPORTANCE_DEFAULT);
-        NM.createNotificationChannel(channel);
+        if (NM != null) {
+            NM.createNotificationChannel(channel);
+        }
 
         new Thread(new Runnable() {
             @Override
             public void run() {
+                Client client = new TcpClient();
+                client.connect(ipAddr, port);
                 File dcim = new File(Environment.getExternalStoragePublicDirectory(Environment.
                         DIRECTORY_DCIM), "Camera");
-                File[] files = dcim.listFiles();
-                List<File> pictures = new LinkedList<File>();
+                List<File> pictures = new LinkedList<>();
                 int count = 0;
                 listAllPictures(dcim, pictures);
-                for (File file : files) {
-                    for (File pic : pictures) {
-                        Socket socket = null;
-                        try {
-                            InetAddress serverAddr = InetAddress.getByName(ipAddr);
-                            socket = new Socket(serverAddr, port);
-                            builder.setProgress(pictures.size(), count, false);
-                            if (count == pictures.size() / 2) {
-                                // halfway there
-                                builder.setContentText("Halfway through and going...");
-                            }
-                            NM.notify(notify_id, builder.build());
-                            if (sendPictureViaTCP(socket, pic)) {
-                                count++;
-                            }
-                        } catch (Exception e) {
-                            Log.e("TCP", "Connection Failed", e);
-                            return;
-                        } finally {
-                            if (socket != null) {
-                                try {
-                                    socket.close();
-                                } catch (IOException e) {
-                                    Log.e("TCP", "Error closing socket", e);
-                                }
-                            }
-                        }
+                for (File pic : pictures) {
+                    builder.setProgress(pictures.size(), count, false);
+                    if (count == pictures.size() / 2) {
+                        // halfway there
+                        builder.setContentText("Halfway through and going...");
                     }
-                    pictures.clear();
+                    NM.notify(notify_id, builder.build());
+                    if (client.sendFile(pic)) {
+                        count++;
+                    }
                 }
                 builder.setProgress(0, 0, false);
                 builder.setContentText("Transfer Complete");
                 NM.notify(notify_id, builder.build());
                 transferFlag = false;
+                client.disconnect();
             }
         }).start();
 
@@ -170,73 +133,6 @@ public class ImageServiceService extends Service {
         } else {
             pictures.add(file);
         }
-    }
-
-
-    /**
-     * @param socket - socket to send through.
-     * @param pic    - picture to send.
-     * @return - true if send was successful.
-     */
-    private boolean sendPictureViaTCP(Socket socket, File pic) {
-        try {
-            OutputStream output = socket.getOutputStream();
-            DataOutputStream outputStream = new DataOutputStream(output);
-            byte[] name = pic.getName().getBytes();
-            byte[] imgBytes = convertPictureToBytes(pic);
-            //byte[] imgBytes = readImageData(pic);
-            if (imgBytes != null) {
-                // length of picture
-                outputStream.writeInt(name.length);
-                output.write(name);
-                outputStream.writeInt(imgBytes.length);
-                //output.write(imgBytes);
-                outputStream.write(imgBytes, 0, imgBytes.length);
-                output.flush();
-            }
-        } catch (Exception e) {
-            Log.e("TCP", "Error Transferring picture" + pic.getName(), e);
-            return false;
-        }
-        return true;
-    }
-
-    private byte[] readImageData(File pic) {
-        byte[] imgData;
-        try {
-            FileInputStream fis = new FileInputStream(pic);
-            ByteArrayOutputStream output = new ByteArrayOutputStream();
-            byte[] buffer = new byte[1024];
-            while ((fis.read(buffer, 0, buffer.length)) != -1) {
-                output.write(buffer);
-            }
-            imgData = output.toByteArray();
-            return imgData;
-        } catch (FileNotFoundException e) {
-            Log.e("File", "Invalid file", e);
-            return null;
-        } catch (IOException e) {
-            Log.e("File", "Failed reading file data", e);
-            return null;
-        }
-    }
-
-    /**
-     * @param pic - picture to convert.
-     * @return - byte array if file is found, null o.w.
-     */
-    @Nullable
-    private byte[] convertPictureToBytes(File pic) {
-        FileInputStream fis;
-        try {
-            fis = new FileInputStream(pic);
-        } catch (FileNotFoundException e) {
-            return null;
-        }
-        Bitmap bm = BitmapFactory.decodeStream(fis);
-        ByteArrayOutputStream stream = new ByteArrayOutputStream();
-        bm.compress(Bitmap.CompressFormat.PNG, 70, stream);
-        return stream.toByteArray();
     }
 
     public int onStartCommand(Intent intent, int flag, int startId) {
